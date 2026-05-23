@@ -1,0 +1,1248 @@
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, HTMLResponse
+import random
+
+app = FastAPI(title="Word Puzzle API", version="2.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+
+WORDS = [
+    "mango", "apple", "orange", "banana", "guava",
+    "cherry", "grape", "jackfruit", "kiwi", "papaya",
+    "lychee", "coconut", "lemon", "peach",
+    "plum", "berry", "melon", "pear", "fig"
+]
+
+_state: dict = {
+    "secret": "",
+    "display": [],
+    "chances": 6,
+    "guessed": [],
+    "active": False,
+}
+
+GAME_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>WordCipher — Word Puzzle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+/* ── Reset & Base ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #050811;
+  --surface:   #0b1121;
+  --glass:     rgba(255,255,255,0.04);
+  --glass2:    rgba(255,255,255,0.07);
+  --border:    rgba(255,255,255,0.08);
+  --border2:   rgba(100,220,255,0.2);
+  --cyan:      #00d4ff;
+  --cyan-dim:  rgba(0,212,255,0.15);
+  --cyan-glow: rgba(0,212,255,0.35);
+  --green:     #00ff9d;
+  --green-dim: rgba(0,255,157,0.12);
+  --red:       #ff4d6d;
+  --red-dim:   rgba(255,77,109,0.12);
+  --yellow:    #ffd166;
+  --text:      #e2e8f0;
+  --text-dim:  #64748b;
+  --text-mid:  #94a3b8;
+  --radius:    16px;
+  --radius-lg: 24px;
+  --font-display: 'Syne', sans-serif;
+  --font-mono:    'Space Mono', monospace;
+}
+
+html {
+  height: 100%;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-display);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 20px 16px 40px;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* ── Animated background mesh ─────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% -10%, rgba(0,212,255,0.07) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 80% 110%, rgba(0,255,157,0.05) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 40% at 50% 50%, rgba(100,50,255,0.04) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(0,212,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,212,255,0.025) 1px, transparent 1px);
+  background-size: 50px 50px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Wrapper ──────────────────────────────────────────────── */
+.wrapper {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* ── Header ───────────────────────────────────────────────── */
+.header {
+  text-align: center;
+  padding: 24px 0 20px;
+}
+
+.logo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--glass);
+  border: 1px solid var(--border2);
+  border-radius: 100px;
+  padding: 6px 16px 6px 10px;
+  margin-bottom: 18px;
+  backdrop-filter: blur(12px);
+}
+
+.logo-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--cyan-glow);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.8); }
+}
+
+.logo-badge span {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: clamp(2rem, 8vw, 3.2rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  background: linear-gradient(135deg, #ffffff 0%, var(--cyan) 50%, var(--green) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 8px;
+}
+
+.subtitle {
+  font-size: 13px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  letter-spacing: 0.05em;
+}
+
+/* ── Card / Glass Panel ───────────────────────────────────── */
+.card {
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  padding: 28px 24px;
+  margin-bottom: 12px;
+  transition: border-color 0.3s ease;
+}
+
+.card:hover {
+  border-color: rgba(255,255,255,0.13);
+}
+
+/* ── Stats row ────────────────────────────────────────────── */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.stat-box {
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 10px;
+  text-align: center;
+  transition: all 0.3s ease;
+}
+
+.stat-box.active-glow {
+  border-color: var(--border2);
+  box-shadow: 0 0 16px var(--cyan-dim);
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  display: block;
+  transition: color 0.3s ease;
+}
+
+.stat-value.danger { color: var(--red); }
+.stat-value.safe   { color: var(--green); }
+.stat-value.warn   { color: var(--yellow); }
+
+/* ── Word Display ─────────────────────────────────────────── */
+.word-section {
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.word-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin-bottom: 20px;
+  display: block;
+}
+
+.word-display {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 64px;
+  align-items: center;
+}
+
+.letter-box {
+  width: 44px;
+  height: 52px;
+  background: var(--glass2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  transition: all 0.35s cubic-bezier(0.34,1.56,0.64,1);
+  position: relative;
+  overflow: hidden;
+}
+
+.letter-box.blank {
+  border-color: rgba(0,212,255,0.2);
+  background: rgba(0,212,255,0.04);
+}
+
+.letter-box.blank::after {
+  content: '';
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 20px;
+  height: 2px;
+  background: var(--cyan);
+  border-radius: 2px;
+  opacity: 0.6;
+}
+
+.letter-box.revealed {
+  border-color: rgba(0,255,157,0.4);
+  background: rgba(0,255,157,0.08);
+  color: var(--green);
+  box-shadow: 0 0 16px rgba(0,255,157,0.15), inset 0 0 10px rgba(0,255,157,0.05);
+  animation: pop-in 0.4s cubic-bezier(0.34,1.56,0.64,1);
+}
+
+@keyframes pop-in {
+  0%   { transform: scale(0.7) rotateX(40deg); opacity: 0; }
+  60%  { transform: scale(1.08) rotateX(-5deg); }
+  100% { transform: scale(1) rotateX(0); opacity: 1; }
+}
+
+/* ── Hangman Visual ───────────────────────────────────────── */
+.hangman-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.hangman-svg {
+  width: 100px;
+  height: 100px;
+}
+
+.hm-part {
+  stroke: var(--text-mid);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  fill: none;
+  opacity: 0;
+  transition: opacity 0.4s ease, stroke 0.4s ease;
+}
+
+.hm-part.visible {
+  opacity: 1;
+}
+
+.hm-part.danger-part {
+  stroke: var(--red);
+}
+
+/* ── Guessed Letters ──────────────────────────────────────── */
+.guessed-section {
+  padding: 0 4px;
+}
+
+.guessed-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 10px;
+  display: block;
+}
+
+.guessed-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 32px;
+  align-items: center;
+}
+
+.guessed-chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  animation: chip-in 0.25s ease;
+}
+
+@keyframes chip-in {
+  from { transform: scale(0); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+.guessed-chip.hit {
+  background: var(--green-dim);
+  border: 1px solid rgba(0,255,157,0.3);
+  color: var(--green);
+}
+
+.guessed-chip.miss {
+  background: var(--red-dim);
+  border: 1px solid rgba(255,77,109,0.25);
+  color: var(--red);
+}
+
+/* ── Input Area ───────────────────────────────────────────── */
+.input-section {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.letter-input {
+  flex: 1;
+  background: var(--glass2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 18px;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  text-align: center;
+  text-transform: uppercase;
+  outline: none;
+  transition: all 0.25s ease;
+  width: 100%;
+  max-width: 80px;
+  letter-spacing: 0.05em;
+  -webkit-appearance: none;
+}
+
+.letter-input:focus {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px var(--cyan-dim), 0 0 20px var(--cyan-dim);
+  background: rgba(0,212,255,0.06);
+}
+
+.letter-input::placeholder {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.letter-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Buttons ──────────────────────────────────────────────── */
+.btn {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1);
+  outline: none;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn:active { transform: scale(0.95); }
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--cyan) 0%, #0099cc 100%);
+  color: #000;
+  padding: 14px 22px;
+  box-shadow: 0 0 20px var(--cyan-dim);
+  flex: 1;
+}
+
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 0 30px var(--cyan-glow);
+  transform: translateY(-1px);
+}
+
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-start {
+  width: 100%;
+  justify-content: center;
+  padding: 16px;
+  font-size: 15px;
+  background: linear-gradient(135deg, rgba(0,212,255,0.15) 0%, rgba(0,255,157,0.1) 100%);
+  border: 1px solid var(--border2);
+  color: var(--cyan);
+  backdrop-filter: blur(12px);
+}
+
+.btn-start:hover {
+  background: linear-gradient(135deg, rgba(0,212,255,0.25) 0%, rgba(0,255,157,0.18) 100%);
+  border-color: var(--cyan);
+  box-shadow: 0 0 24px var(--cyan-dim);
+  transform: translateY(-1px);
+}
+
+/* ── Start Screen ─────────────────────────────────────────── */
+.start-card {
+  text-align: center;
+  padding: 40px 24px;
+}
+
+.start-icon {
+  font-size: 52px;
+  margin-bottom: 16px;
+  display: block;
+  filter: drop-shadow(0 0 16px rgba(0,212,255,0.4));
+}
+
+.start-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.start-desc {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.7;
+  margin-bottom: 28px;
+}
+
+/* ── Result Card ──────────────────────────────────────────── */
+.result-card {
+  text-align: center;
+  padding: 32px 24px;
+  animation: result-appear 0.5s cubic-bezier(0.34,1.56,0.64,1);
+}
+
+@keyframes result-appear {
+  from { transform: scale(0.85) translateY(20px); opacity: 0; }
+  to   { transform: scale(1) translateY(0); opacity: 1; }
+}
+
+.result-card.win {
+  border-color: rgba(0,255,157,0.35);
+  box-shadow: 0 0 40px rgba(0,255,157,0.1), inset 0 0 60px rgba(0,255,157,0.04);
+}
+
+.result-card.lose {
+  border-color: rgba(255,77,109,0.35);
+  box-shadow: 0 0 40px rgba(255,77,109,0.1), inset 0 0 60px rgba(255,77,109,0.04);
+}
+
+.result-emoji {
+  font-size: 56px;
+  margin-bottom: 12px;
+  display: block;
+}
+
+.result-title {
+  font-size: 26px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.result-title.win  { color: var(--green); }
+.result-title.lose { color: var(--red); }
+
+.result-word {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-mid);
+  margin-bottom: 24px;
+}
+
+.result-word strong {
+  color: var(--text);
+  font-size: 17px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  display: block;
+  margin-top: 4px;
+}
+
+/* ── Status toast ─────────────────────────────────────────── */
+.toast {
+  text-align: center;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: all 0.3s ease;
+  border: 1px solid transparent;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.info  { background: var(--cyan-dim);  border-color: rgba(0,212,255,0.25);  color: var(--cyan);  }
+.toast.good  { background: var(--green-dim); border-color: rgba(0,255,157,0.25); color: var(--green); }
+.toast.bad   { background: var(--red-dim);   border-color: rgba(255,77,109,0.25);  color: var(--red);   }
+.toast.warn  { background: rgba(255,209,102,0.1); border-color: rgba(255,209,102,0.25); color: var(--yellow); }
+
+/* ── Spinner ──────────────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(0,0,0,0.2);
+  border-top-color: #000;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Alphabet Keyboard (mobile-friendly) ──────────────────── */
+.keyboard {
+  display: none;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 16px 8px;
+}
+
+.key-btn {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--glass2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  text-transform: uppercase;
+  -webkit-tap-highlight-color: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.key-btn:hover:not(.used) {
+  background: rgba(0,212,255,0.1);
+  border-color: var(--border2);
+  color: var(--cyan);
+}
+
+.key-btn:active:not(.used) { transform: scale(0.92); }
+
+.key-btn.used-hit  { background: var(--green-dim); border-color: rgba(0,255,157,0.3); color: var(--green);  opacity: 0.7; pointer-events: none; }
+.key-btn.used-miss { background: var(--red-dim);   border-color: rgba(255,77,109,0.25); color: var(--red); opacity: 0.5; pointer-events: none; }
+
+/* ── Section transitions ──────────────────────────────────── */
+.game-section {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.game-section.hidden {
+  display: none;
+}
+
+/* ── Responsive ───────────────────────────────────────────── */
+@media (max-width: 480px) {
+  body { padding: 12px 12px 32px; }
+
+  .card { padding: 20px 16px; }
+
+  .title { font-size: 2.2rem; }
+
+  .letter-box { width: 38px; height: 46px; font-size: 17px; gap: 6px; }
+
+  .word-display { gap: 6px; }
+
+  .keyboard { display: flex; }
+
+  .input-section { gap: 8px; }
+
+  .letter-input { max-width: 70px; font-size: 20px; padding: 12px 10px; }
+
+  .btn-primary { padding: 14px 14px; font-size: 13px; }
+
+  .stats { gap: 8px; }
+
+  .stat-value { font-size: 18px; }
+}
+
+@media (min-width: 481px) {
+  .keyboard { display: none !important; }
+}
+
+/* ── Confetti particles (JS-driven) ───────────────────────── */
+.confetti-wrap {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 999;
+  overflow: hidden;
+}
+
+.conf {
+  position: absolute;
+  top: -10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: fall linear forwards;
+}
+
+@keyframes fall {
+  0%   { transform: translateY(-10px) rotate(0deg);   opacity: 1; }
+  100% { transform: translateY(105vh) rotate(720deg); opacity: 0; }
+}
+
+/* ── Footer ───────────────────────────────────────────────── */
+.footer {
+  text-align: center;
+  padding-top: 8px;
+}
+
+.footer p {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+}
+
+.footer span {
+  color: var(--cyan);
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="confetti-wrap" id="confettiWrap"></div>
+
+<div class="wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo-badge">
+      <div class="logo-dot"></div>
+      <span>Word Cipher v2.0</span>
+    </div>
+    <h1 class="title">WordCipher</h1>
+    <p class="subtitle">// decrypt the hidden word</p>
+  </div>
+
+  <!-- START SCREEN -->
+  <div id="startScreen" class="card start-card game-section">
+    <span class="start-icon">🔐</span>
+    <p class="start-title">Ready to crack the code?</p>
+    <p class="start-desc">
+      Guess the hidden word letter by letter.<br>
+      You have 6 attempts before the cipher locks.
+    </p>
+    <button class="btn btn-start" onclick="startGame()" id="startBtn">
+      <span id="startBtnContent">⚡ Initialize Game</span>
+    </button>
+  </div>
+
+  <!-- GAME SCREEN -->
+  <div id="gameScreen" class="game-section hidden">
+
+    <!-- Stats -->
+    <div class="stats">
+      <div class="stat-box" id="statChances">
+        <span class="stat-label">Attempts Left</span>
+        <span class="stat-value" id="chancesVal">6</span>
+      </div>
+      <div class="stat-box" id="statProgress">
+        <span class="stat-label">Letters Found</span>
+        <span class="stat-value safe" id="progressVal">0</span>
+      </div>
+      <div class="stat-box" id="statLength">
+        <span class="stat-label">Word Length</span>
+        <span class="stat-value" id="lengthVal">—</span>
+      </div>
+    </div>
+
+    <!-- Main game card -->
+    <div class="card">
+
+      <!-- Hangman SVG -->
+      <div class="hangman-wrap">
+        <svg class="hangman-svg" viewBox="0 0 100 100">
+          <!-- Gallows -->
+          <line x1="10" y1="95" x2="90" y2="95" stroke="rgba(100,116,139,0.4)" stroke-width="2" stroke-linecap="round"/>
+          <line x1="30" y1="95" x2="30" y2="5"  stroke="rgba(100,116,139,0.4)" stroke-width="2" stroke-linecap="round"/>
+          <line x1="30" y1="5"  x2="65" y2="5"  stroke="rgba(100,116,139,0.4)" stroke-width="2" stroke-linecap="round"/>
+          <line x1="65" y1="5"  x2="65" y2="18" stroke="rgba(100,116,139,0.4)" stroke-width="2" stroke-linecap="round"/>
+          <!-- Body parts (revealed progressively) -->
+          <circle cx="65" cy="25" r="7" class="hm-part" id="hm-head"/>        <!-- miss 1 -->
+          <line x1="65" y1="32" x2="65" y2="55" class="hm-part" id="hm-body"/> <!-- miss 2 -->
+          <line x1="65" y1="38" x2="52" y2="48" class="hm-part" id="hm-la"/>   <!-- miss 3 -->
+          <line x1="65" y1="38" x2="78" y2="48" class="hm-part" id="hm-ra"/>   <!-- miss 4 -->
+          <line x1="65" y1="55" x2="52" y2="70" class="hm-part" id="hm-ll"/>   <!-- miss 5 -->
+          <line x1="65" y1="55" x2="78" y2="70" class="hm-part" id="hm-rl"/>   <!-- miss 6 -->
+        </svg>
+      </div>
+
+      <!-- Word display -->
+      <div class="word-section">
+        <span class="word-label">// cipher sequence</span>
+        <div class="word-display" id="wordDisplay"></div>
+      </div>
+
+      <!-- Toast -->
+      <div class="toast" id="toast"></div>
+
+    </div><!-- /card -->
+
+    <!-- Guessed letters -->
+    <div class="card guessed-section">
+      <span class="guessed-label">// guessed characters</span>
+      <div class="guessed-row" id="guessedRow">
+        <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim)">none yet...</span>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="card" style="padding: 20px 24px;">
+      <div class="input-section">
+        <input
+          class="letter-input"
+          id="letterInput"
+          type="text"
+          maxlength="1"
+          placeholder="A"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck="false"
+        >
+        <button class="btn btn-primary" id="guessBtn" onclick="doGuess()">
+          <span id="guessBtnContent">Decode ↵</span>
+        </button>
+      </div>
+      <!-- Mobile keyboard -->
+      <div class="keyboard" id="keyboard"></div>
+    </div>
+
+    <!-- New game button -->
+    <button class="btn btn-start" onclick="startGame()" style="margin-bottom:8px;">
+      ↺ New Game
+    </button>
+
+  </div><!-- /gameScreen -->
+
+  <!-- RESULT SCREEN -->
+  <div id="resultScreen" class="game-section hidden">
+    <div class="card result-card" id="resultCard">
+      <span class="result-emoji" id="resultEmoji"></span>
+      <p class="result-title" id="resultTitle"></p>
+      <div class="result-word" id="resultWord"></div>
+      <button class="btn btn-start" onclick="startGame()" style="max-width: 280px; margin: 0 auto;">
+        ⚡ Play Again
+      </button>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <p>Built with <span>FastAPI</span> + Vanilla JS · WordCipher <span>v2.0</span></p>
+  </div>
+
+</div><!-- /wrapper -->
+
+<script>
+// ── Config ────────────────────────────────────────────────
+const API = "";
+const HANGMAN_PARTS = ["hm-head","hm-body","hm-la","hm-ra","hm-ll","hm-rl"];
+const MAX_CHANCES = 6;
+
+// ── State ─────────────────────────────────────────────────
+let state = {
+  display: [],
+  guessed: [],
+  chances: MAX_CHANCES,
+  active: false,
+  loading: false,
+};
+
+// ── Screens ───────────────────────────────────────────────
+function showScreen(name) {
+  ["startScreen","gameScreen","resultScreen"].forEach(id => {
+    const el = document.getElementById(id);
+    el.classList.toggle("hidden", id !== name);
+  });
+}
+
+// ── Toast ─────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, type = "info") {
+  const t = document.getElementById("toast");
+  clearTimeout(toastTimer);
+  t.className = `toast show ${type}`;
+  t.textContent = msg;
+  toastTimer = setTimeout(() => {
+    t.classList.remove("show");
+  }, 2200);
+}
+
+// ── Hangman ───────────────────────────────────────────────
+function updateHangman(chancesLeft) {
+  const misses = MAX_CHANCES - chancesLeft;
+  HANGMAN_PARTS.forEach((id, i) => {
+    const el = document.getElementById(id);
+    const show = i < misses;
+    el.classList.toggle("visible", show);
+    el.classList.toggle("danger-part", show && misses >= MAX_CHANCES - 1);
+  });
+}
+
+// ── Word Display ──────────────────────────────────────────
+function renderWord(display) {
+  const container = document.getElementById("wordDisplay");
+  container.innerHTML = "";
+  display.forEach(ch => {
+    const box = document.createElement("div");
+    box.className = "letter-box " + (ch === "_" ? "blank" : "revealed");
+    box.textContent = ch === "_" ? "" : ch.toUpperCase();
+    container.appendChild(box);
+  });
+}
+
+// ── Stats ─────────────────────────────────────────────────
+function updateStats(chances, display) {
+  const found = display.filter(c => c !== "_").length;
+  const chancesEl = document.getElementById("chancesVal");
+  chancesEl.textContent = chances;
+  chancesEl.className = "stat-value " +
+    (chances <= 2 ? "danger" : chances <= 4 ? "warn" : "safe");
+  document.getElementById("progressVal").textContent = found;
+  document.getElementById("lengthVal").textContent = display.length;
+  updateHangman(chances);
+}
+
+// ── Guessed chips ─────────────────────────────────────────
+function renderGuessed(guessed, display) {
+  const row = document.getElementById("guessedRow");
+  if (!guessed.length) {
+    row.innerHTML = '<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim)">none yet...</span>';
+    return;
+  }
+  row.innerHTML = "";
+  guessed.forEach(ch => {
+    const isHit = display.includes(ch);
+    const chip = document.createElement("span");
+    chip.className = "guessed-chip " + (isHit ? "hit" : "miss");
+    chip.textContent = ch.toUpperCase();
+    row.appendChild(chip);
+  });
+}
+
+// ── Mobile Keyboard ───────────────────────────────────────
+function buildKeyboard() {
+  const kb = document.getElementById("keyboard");
+  kb.innerHTML = "";
+  "abcdefghijklmnopqrstuvwxyz".split("").forEach(ch => {
+    const btn = document.createElement("button");
+    btn.className = "key-btn";
+    btn.id = "key-" + ch;
+    btn.textContent = ch.toUpperCase();
+    btn.onclick = () => {
+      document.getElementById("letterInput").value = ch;
+      doGuess();
+    };
+    kb.appendChild(btn);
+  });
+}
+
+function syncKeyboard(guessed, display) {
+  guessed.forEach(ch => {
+    const btn = document.getElementById("key-" + ch);
+    if (btn) {
+      const hit = display.includes(ch);
+      btn.className = "key-btn " + (hit ? "used-hit" : "used-miss");
+    }
+  });
+}
+
+// ── Loading state ─────────────────────────────────────────
+function setLoading(loading) {
+  state.loading = loading;
+  const gBtn = document.getElementById("guessBtnContent");
+  const gInput = document.getElementById("letterInput");
+  const guessBtn = document.getElementById("guessBtn");
+  if (loading) {
+    gBtn.innerHTML = '<span class="spinner"></span>';
+    guessBtn.disabled = true;
+    gInput.disabled = true;
+  } else {
+    gBtn.textContent = "Decode ↵";
+    guessBtn.disabled = false;
+    gInput.disabled = false;
+    gInput.focus();
+  }
+}
+
+// ── Start Game ─────────────────────────────────────────────
+async function startGame() {
+  const btn = document.getElementById("startBtn");
+  const btnContent = document.getElementById("startBtnContent");
+  if (btnContent) btnContent.innerHTML = '<span class="spinner" style="border-color:rgba(0,212,255,0.2);border-top-color:var(--cyan)"></span> Loading...';
+
+  try {
+    const res = await fetch(`${API}/start`);
+    if (!res.ok) throw new Error("Server error");
+    const data = await res.json();
+
+    state.display  = data.display;
+    state.chances  = data.chance;
+    state.guessed  = data.guessed || [];
+    state.active   = true;
+
+    buildKeyboard();
+    renderWord(state.display);
+    updateStats(state.chances, state.display);
+    renderGuessed(state.guessed, state.display);
+    showScreen("gameScreen");
+
+    setTimeout(() => {
+      document.getElementById("letterInput").focus();
+    }, 100);
+
+  } catch (e) {
+    if (btnContent) btnContent.textContent = "⚡ Initialize Game";
+    showToast("⚠ Cannot connect to server. Is FastAPI running?", "bad");
+  }
+}
+
+// ── Guess ─────────────────────────────────────────────────
+async function doGuess() {
+  if (state.loading || !state.active) return;
+
+  const input = document.getElementById("letterInput");
+  const letter = input.value.trim().toLowerCase();
+  input.value = "";
+
+  if (!letter || !/^[a-z]$/.test(letter)) {
+    showToast("Enter a single letter A–Z", "warn");
+    return;
+  }
+
+  if (state.guessed.includes(letter)) {
+    showToast(`Already tried "${letter.toUpperCase()}"`, "warn");
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    const res = await fetch(`${API}/guess?letter=${encodeURIComponent(letter)}`);
+    if (!res.ok) throw new Error("Server error");
+    const data = await res.json();
+
+    // Game over (win/lose)
+    if (data.result) {
+      state.active = false;
+      const won = data.result === "win";
+      showResult(won, data.word, data.display || state.display);
+      return;
+    }
+
+    // Continue
+    state.display  = data.word;
+    state.chances  = data.chance;
+    state.guessed  = data.guessed || state.guessed;
+
+    if (!state.guessed.includes(letter)) state.guessed.push(letter);
+
+    renderWord(state.display);
+    updateStats(state.chances, state.display);
+    renderGuessed(state.guessed, state.display);
+    syncKeyboard(state.guessed, state.display);
+
+    if (data.hit === false) {
+      showToast(`"${letter.toUpperCase()}" — not in word. ${state.chances} left`, "bad");
+    } else if (data.info === "already_guessed") {
+      showToast(`Already guessed "${letter.toUpperCase()}"`, "warn");
+    } else {
+      showToast(`"${letter.toUpperCase()}" — correct!`, "good");
+    }
+
+  } catch (e) {
+    showToast("Server error. Check backend.", "bad");
+  } finally {
+    setLoading(false);
+  }
+}
+
+// ── Result ─────────────────────────────────────────────────
+function showResult(won, word, display) {
+  setLoading(false);
+  renderWord(display);
+  updateStats(won ? 1 : 0, display);
+
+  const card = document.getElementById("resultCard");
+  card.className = "card result-card " + (won ? "win" : "lose");
+  document.getElementById("resultEmoji").textContent = won ? "🏆" : "💀";
+
+  const titleEl = document.getElementById("resultTitle");
+  titleEl.textContent = won ? "Cipher Cracked!" : "Connection Lost";
+  titleEl.className = "result-title " + (won ? "win" : "lose");
+
+  document.getElementById("resultWord").innerHTML =
+    `The word was:<strong>${word.toUpperCase()}</strong>`;
+
+  showScreen("resultScreen");
+
+  if (won) spawnConfetti();
+}
+
+// ── Confetti ───────────────────────────────────────────────
+function spawnConfetti() {
+  const wrap = document.getElementById("confettiWrap");
+  wrap.innerHTML = "";
+  const colors = ["#00d4ff","#00ff9d","#ffd166","#ff6b6b","#a78bfa","#ffffff"];
+  for (let i = 0; i < 70; i++) {
+    const el = document.createElement("div");
+    el.className = "conf";
+    el.style.cssText = `
+      left: ${Math.random()*100}%;
+      background: ${colors[Math.floor(Math.random()*colors.length)]};
+      animation-duration: ${1.2 + Math.random()*1.8}s;
+      animation-delay: ${Math.random()*0.8}s;
+      width: ${6 + Math.random()*8}px;
+      height: ${6 + Math.random()*8}px;
+      border-radius: ${Math.random()>0.5 ? "50%" : "2px"};
+    `;
+    wrap.appendChild(el);
+  }
+  setTimeout(() => { wrap.innerHTML = ""; }, 3500);
+}
+
+// ── Keyboard shortcuts ─────────────────────────────────────
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter") doGuess();
+});
+
+document.getElementById("letterInput")?.addEventListener("input", e => {
+  // Force single alphabetic char
+  e.target.value = e.target.value.replace(/[^a-zA-Z]/g, "").slice(-1);
+});
+
+// ── Init ──────────────────────────────────────────────────
+showScreen("startScreen");
+</script>
+</body>
+</html>
+"""
+
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_game():
+    return HTMLResponse(content=GAME_HTML)
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "message": "Word Puzzle API v2"}
+
+
+@app.get("/start")
+async def start():
+    _state["secret"] = random.choice(WORDS)
+    _state["display"] = ["_"] * len(_state["secret"])
+    _state["chances"] = 6
+    _state["guessed"] = []
+    _state["active"] = True
+    return JSONResponse({
+        "display": _state["display"],
+        "chance": _state["chances"],
+        "length": len(_state["secret"]),
+        "guessed": [],
+    })
+
+
+@app.get("/guess")
+async def guess(letter: str = Query(..., min_length=1, max_length=1)):
+    if not _state["active"]:
+        raise HTTPException(status_code=400, detail="Start a game first")
+
+    letter = letter.lower()
+
+    if letter in _state["guessed"]:
+        return JSONResponse({
+            "display": _state["display"],
+            "chance": _state["chances"],
+            "guessed": _state["guessed"],
+            "info": "already_guessed",
+        })
+
+    _state["guessed"].append(letter)
+    hit = False
+
+    for i, ch in enumerate(_state["secret"]):
+        if ch == letter:
+            _state["display"][i] = letter
+            hit = True
+
+    if not hit:
+        _state["chances"] -= 1
+
+    if "_" not in _state["display"]:
+        _state["active"] = False
+        return JSONResponse({
+            "result": "win",
+            "word": _state["secret"],
+            "display": _state["display"],
+            "guessed": _state["guessed"],
+        })
+
+    if _state["chances"] <= 0:
+        _state["active"] = False
+        return JSONResponse({
+            "result": "lose",
+            "word": _state["secret"],
+            "display": _state["display"],
+            "guessed": _state["guessed"],
+        })
+
+    return JSONResponse({
+        "display": _state["display"],
+        "chance": _state["chances"],
+        "guessed": _state["guessed"],
+        "hit": hit,
+    })
+
+
+@app.get("/state")
+async def get_state():
+    if not _state["active"]:
+        return JSONResponse({"active": False})
+    return JSONResponse({
+        "active": True,
+        "display": _state["display"],
+        "chance": _state["chances"],
+        "guessed": _state["guessed"],
+        "length": len(_state["secret"]),
+    })
