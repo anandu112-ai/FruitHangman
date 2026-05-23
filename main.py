@@ -1,27 +1,43 @@
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
 import random
 
 app = FastAPI(title="Word Puzzle API", version="2.0")
 
+# -----------------------------
+# CORS
+# -----------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Word bank organized by category for future extensibility
+# -----------------------------
+# Static + Templates
+# -----------------------------
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+# -----------------------------
+# Word Bank
+# -----------------------------
 WORDS = [
     "mango", "apple", "orange", "banana", "guava",
     "cherry", "grape", "jackfruit", "kiwi", "papaya",
-    "lychee", "mango", "coconut", "lemon", "peach",
+    "lychee", "coconut", "lemon", "peach",
     "plum", "berry", "melon", "pear", "fig"
 ]
 
-# In-memory game state (per-server; for production use session/redis)
-_state: dict = {
+# -----------------------------
+# Game State
+# -----------------------------
+_state = {
     "secret": "",
     "display": [],
     "chances": 6,
@@ -29,17 +45,36 @@ _state: dict = {
     "active": False,
 }
 
-
+# -----------------------------
+# FRONTEND ROUTE
+# -----------------------------
 @app.get("/")
-async def root():
-    return {"status": "ok", "message": "Word Puzzle API v2"}
+async def home(request: Request):
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request}
+    )
 
+# -----------------------------
+# API STATUS
+# -----------------------------
+@app.get("/api")
+async def api():
+    return {
+        "status": "ok",
+        "message": "Word Puzzle API v2"
+    }
 
+# -----------------------------
+# START GAME
+# -----------------------------
 @app.get("/start")
 async def start():
-    """Initialize a new game and return masked word."""
-    _state["secret"] = random.choice(WORDS)
-    _state["display"] = ["_"] * len(_state["secret"])
+
+    secret = random.choice(WORDS)
+
+    _state["secret"] = secret
+    _state["display"] = ["_"] * len(secret)
     _state["chances"] = 6
     _state["guessed"] = []
     _state["active"] = True
@@ -47,16 +82,21 @@ async def start():
     return JSONResponse({
         "display": _state["display"],
         "chance": _state["chances"],
-        "length": len(_state["secret"]),
+        "length": len(secret),
         "guessed": [],
     })
 
-
+# -----------------------------
+# GUESS LETTER
+# -----------------------------
 @app.get("/guess")
 async def guess(letter: str = Query(..., min_length=1, max_length=1)):
-    """Process a letter guess and return updated state."""
+
     if not _state["active"]:
-        raise HTTPException(status_code=400, detail="Start a game first")
+        raise HTTPException(
+            status_code=400,
+            detail="Start a game first"
+        )
 
     letter = letter.lower()
 
@@ -70,6 +110,7 @@ async def guess(letter: str = Query(..., min_length=1, max_length=1)):
         })
 
     _state["guessed"].append(letter)
+
     hit = False
 
     for i, ch in enumerate(_state["secret"]):
@@ -80,9 +121,10 @@ async def guess(letter: str = Query(..., min_length=1, max_length=1)):
     if not hit:
         _state["chances"] -= 1
 
-    # Win
+    # WIN
     if "_" not in _state["display"]:
         _state["active"] = False
+
         return JSONResponse({
             "result": "win",
             "word": _state["secret"],
@@ -90,9 +132,10 @@ async def guess(letter: str = Query(..., min_length=1, max_length=1)):
             "guessed": _state["guessed"],
         })
 
-    # Lose
+    # LOSE
     if _state["chances"] <= 0:
         _state["active"] = False
+
         return JSONResponse({
             "result": "lose",
             "word": _state["secret"],
@@ -107,12 +150,17 @@ async def guess(letter: str = Query(..., min_length=1, max_length=1)):
         "hit": hit,
     })
 
-
+# -----------------------------
+# GAME STATE
+# -----------------------------
 @app.get("/state")
 async def state():
-    """Return current game state (for reconnect)."""
+
     if not _state["active"]:
-        return JSONResponse({"active": False})
+        return JSONResponse({
+            "active": False
+        })
+
     return JSONResponse({
         "active": True,
         "display": _state["display"],
