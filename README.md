@@ -1,6 +1,5 @@
 🍎 Fruit Word Game
-A fast-paced and fun fruit-themed word puzzle game built with modern web technologies. Players test their vocabulary skills by guessing or forming fruit-related words in an interactive and responsive interface.
-fruitgame.onrender.com⁠�
+A fast-paced and fun fruit-themed word puzzle game built with modern web technologies. Players test their vocabulary https://fruitgame.onrender.com
 ✨ Features
 🎮 Interactive fruit word gameplay
 ⚡ Fast and responsive UI
